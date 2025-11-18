@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableList;
@@ -31,9 +32,12 @@ import org.junit.runners.Parameterized;
 import org.junit.runners.Suite;
 
 import org.opensearch.action.support.IndicesOptions;
+import org.opensearch.cluster.ClusterName;
+import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.metadata.IndexAbstraction;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
+import org.opensearch.cluster.metadata.Metadata;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ThreadContext;
 import org.opensearch.core.common.unit.ByteSizeUnit;
@@ -960,6 +964,43 @@ public class ActionPrivilegesTest {
             );
             assertThat(resultForIndexNotCoveredByAlias, isForbidden());
         }
+
+        /**
+         * Tests the behavior of hasIndexPrivilege when the resolved indices are empty.
+         * @throws Exception If failed.
+         */
+        @Test
+        public void hasIndexPrivilegeEmptyResolvedIndices() throws Exception {
+            SecurityDynamicConfiguration<RoleV7> roles = SecurityDynamicConfiguration.fromYaml(
+                "test_role:\n"
+                    + "  index_permissions:\n"
+                    + "  - index_patterns: ['*']\n"
+                    + "    allowed_actions: ['indices:monitor/recovery']",
+                CType.ROLES
+            );
+
+            PrivilegesEvaluationContext context = ctxWithState(
+                () -> ClusterState.builder(ClusterName.CLUSTER_NAME_SETTING.getDefault(Settings.EMPTY))
+                                  .metadata(Metadata.builder().build())
+                                  .build(),
+                "test_role"
+            );
+
+            ActionPrivileges subject = new ActionPrivileges(
+                roles,
+                FlattenedActionGroups.EMPTY,
+                Collections::emptyMap,
+                Settings.EMPTY
+            );
+
+            PrivilegesEvaluatorResponse result = subject.hasIndexPrivilege(
+                context,
+                ImmutableSet.of("indices:monitor/recovery"),
+                IndexResolverReplacer.Resolved._LOCAL_ALL
+            );
+
+            assertThat(result, isAllowed());
+        }
     }
 
     /**
@@ -1071,6 +1112,10 @@ public class ActionPrivilegesTest {
     }
 
     static PrivilegesEvaluationContext ctx(String... roles) {
+        return ctxWithState(null, roles);
+    }
+
+    static PrivilegesEvaluationContext ctxWithState(Supplier<ClusterState> clusterStateSupplier, String... roles) {
         User user = new User("test_user");
         user.addAttributes(ImmutableMap.of("attrs.dept_no", "a11"));
         return new PrivilegesEvaluationContext(
@@ -1081,7 +1126,7 @@ public class ActionPrivilegesTest {
             null,
             null,
             new IndexNameExpressionResolver(new ThreadContext(Settings.EMPTY)),
-            null
+            clusterStateSupplier
         );
     }
 
